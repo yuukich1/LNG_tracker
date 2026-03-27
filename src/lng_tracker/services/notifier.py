@@ -1,4 +1,4 @@
-﻿import csv
+import csv
 import os
 from datetime import datetime
 
@@ -9,6 +9,7 @@ from loguru import logger
 from lng_tracker.core.config import settings
 from lng_tracker.repository.users import UserRepository
 from lng_tracker.repository.vessels import VesselRepository
+from lng_tracker.services.dataset_builder import DatasetBuilder
 
 
 class TelegramNotifier:
@@ -16,6 +17,7 @@ class TelegramNotifier:
         self.bot = bot
         self.users_repository = UserRepository()
         self.vessels_repository = VesselRepository()
+        self.dataset_builder = DatasetBuilder()
 
     async def send_vessel_alert(self, vessel_name: str, zone: str, mmsi: str):
         allowed_user = await self.users_repository.get_allowed_users()
@@ -66,9 +68,10 @@ class TelegramNotifier:
 
         training_file_path = os.path.join(datasets_dir, "training_dataset.csv")
         self._write_training_dataset(training_file_path, training_rows)
+        await self.dataset_builder.export(datasets_dir)
 
         if not daily_records:
-            logger.info("No daily events found for report; training dataset updated only")
+            logger.info("No daily events found for report; datasets updated only")
             return
 
         daily_filename = f"lng_report_{now.strftime('%d_%m_%Y')}.csv"
@@ -79,9 +82,9 @@ class TelegramNotifier:
             chat_id=settings.chat_id,
             document=FSInputFile(daily_file_path),
             caption=(
-                f"📈 <b>Суточный отчет</b>\n"
-                f"Событий за сегодня: {len(daily_records)}\n"
-                f"🧠 Датасет обновлен: <code>data/datasets/training_dataset.csv</code>"
+                f"<b>Daily report</b>\n"
+                f"Events today: {len(daily_records)}\n"
+                f"Datasets updated: <code>data/datasets/</code>"
             ),
             parse_mode="HTML",
         )

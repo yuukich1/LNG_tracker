@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import delete, func, select
 
 from lng_tracker.database.connect import async_session_maker
-from lng_tracker.database.models import VesselHistory, VesselState
+from lng_tracker.database.models import AISObservation, VesselHistory, VesselState
 
 
 @dataclass
@@ -48,6 +48,7 @@ class VesselRepository:
         async with async_session_maker() as session:
             await session.execute(delete(VesselState))
             await session.execute(delete(VesselHistory))
+            await session.execute(delete(AISObservation))
             await session.commit()
 
     async def get_history(self):

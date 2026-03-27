@@ -8,6 +8,8 @@ Telegram-бот для мониторинга LNG-судов в заданных
 - Определяет вход LNG-судов в контролируемые зоны.
 - Отправляет уведомления в Telegram пользователям из белого списка.
 - Хранит текущее состояние и историю событий в SQLite.
+- Сохраняет сырые AIS-наблюдения LNG-судов для дальнейшей ML-обработки.
+- Экспортирует ML-датасеты в `json` и `jsonl`.
 
 ## Стек
 
@@ -47,6 +49,12 @@ database_url=sqlite+aiosqlite:///data/monitor.db
 poetry run python src/main.py
 ```
 
+Ручной экспорт датасета:
+
+```bash
+poetry run python src/export_dataset.py
+```
+
 ## Логи
 
 Логи пишутся:
@@ -74,7 +82,9 @@ poetry run python src/main.py
 ## Структура проекта
 
 - `src/main.py` - точка входа
+- `src/export_dataset.py` - ручной экспорт ML-датасета
 - `src/lng_tracker/services/engine.py` - движок мониторинга
+- `src/lng_tracker/services/dataset_builder.py` - сборка `ais_observations`, `vessel_zone_events`, `sts_candidates`
 - `src/lng_tracker/services/notifier.py` - отправка уведомлений
 - `src/lng_tracker/bot/handlers.py` - команды Telegram-бота
 - `src/lng_tracker/database/` - модели и подключение к БД
@@ -83,3 +93,5 @@ poetry run python src/main.py
 
 - Каталог `data/` создается автоматически при запуске.
 - При первом запуске таблицы в базе создаются автоматически.
+- Датасеты сохраняются в `data/datasets/`.
+- Полноценные `ais_observations` и качественные `sts_candidates` накапливаются по мере работы бота, начиная с момента обновления схемы.
