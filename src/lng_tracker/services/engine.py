@@ -21,7 +21,7 @@ class LNGMonitorEngine:
         async with async_session_maker() as session:
             stmt = select(VesselState).where(VesselState.is_active == True)
             res = await session.execute(stmt)
-            active_in_db = {v.mmsi: v.zone for v in res.scalars()}
+            active_in_db = {v.mmsi: {"zone": v.zone, "name": v.name} for v in res.scalars()}
             logger.debug("Loaded active vessels from DB: {}", len(active_in_db))
 
             async with httpx.AsyncClient(timeout=30) as client:
@@ -53,7 +53,7 @@ class LNGMonitorEngine:
                     if bounds[0] <= lat <= bounds[1] and bounds[2] <= lon <= bounds[3]:
                         current_mmsis[mmsi] = zone_name
 
-                        if mmsi not in active_in_db or active_in_db[mmsi] != zone_name:
+                        if mmsi not in active_in_db or active_in_db[mmsi]["zone"] != zone_name:
                             logger.info(
                                 "ENTRY detected | vessel={} | mmsi={} | zone={}",
                                 name,
@@ -80,16 +80,23 @@ class LNGMonitorEngine:
                             entry_count += 1
                         break
 
-            for mmsi, zone in active_in_db.items():
+            for mmsi, vessel_data in active_in_db.items():
                 if mmsi not in current_mmsis:
                     await session.execute(
                         update(VesselState)
                         .where(VesselState.mmsi == mmsi)
                         .values(is_active=False)
                     )
-                    session.add(VesselHistory(mmsi=mmsi, name="N/A", zone=zone, event_type="EXIT"))
+                    session.add(
+                        VesselHistory(
+                            mmsi=mmsi,
+                            name=vessel_data["name"],
+                            zone=vessel_data["zone"],
+                            event_type="EXIT",
+                        )
+                    )
                     exit_count += 1
-                    logger.info("EXIT detected | mmsi={} | zone={}", mmsi, zone)
+                    logger.info("EXIT detected | mmsi={} | zone={}", mmsi, vessel_data["zone"])
 
             await session.commit()
             logger.info(

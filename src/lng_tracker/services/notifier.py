@@ -1,15 +1,15 @@
 ﻿import csv
-from datetime import datetime
-import io
 import os
+from datetime import datetime
 
 from aiogram import Bot
-from aiogram.types import BufferedInputFile, FSInputFile
+from aiogram.types import FSInputFile
 from loguru import logger
 
+from lng_tracker.core.config import settings
 from lng_tracker.repository.users import UserRepository
 from lng_tracker.repository.vessels import VesselRepository
-from lng_tracker.core.config import settings
+
 
 class TelegramNotifier:
     def __init__(self, bot: Bot):
@@ -53,35 +53,73 @@ class TelegramNotifier:
 
         logger.info("Alert delivery completed: {}/{}", delivered, len(allowed_user))
 
-
     async def send_daily_csv_report(self):
-        records = await self.vessels_repository.get_history()
-        if not records:
-            return
+        now = datetime.now()
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        daily_records = await self.vessels_repository.get_history_report_rows(since=day_start)
+        training_rows = await self.vessels_repository.get_training_dataset_rows()
+
         reports_dir = os.path.join(os.getcwd(), "data", "reports")
+        datasets_dir = os.path.join(os.getcwd(), "data", "datasets")
         os.makedirs(reports_dir, exist_ok=True)
+        os.makedirs(datasets_dir, exist_ok=True)
 
-        filename = f"lng_report_{datetime.now().strftime('%d_%m_%Y')}.csv"
-        file_path = os.path.join(reports_dir, filename)
+        training_file_path = os.path.join(datasets_dir, "training_dataset.csv")
+        self._write_training_dataset(training_file_path, training_rows)
 
-        with open(file_path, mode='w', encoding='utf-8-sig', newline='') as f:
-            writer = csv.writer(f, delimiter=';')
-            writer.writerow(['Vessel', 'Zone', 'Event', 'Time'])
-            for r in records:
-                writer.writerow([
-                    r.name, 
-                    r.zone, 
-                    r.event_type, 
-                    r.dt.strftime('%H:%M:%S')
-                ])
+        if not daily_records:
+            logger.info("No daily events found for report; training dataset updated only")
+            return
+
+        daily_filename = f"lng_report_{now.strftime('%d_%m_%Y')}.csv"
+        daily_file_path = os.path.join(reports_dir, daily_filename)
+        self._write_daily_report(daily_file_path, daily_records)
 
         await self.bot.send_document(
             chat_id=settings.chat_id,
-            document=FSInputFile(file_path),
+            document=FSInputFile(daily_file_path),
             caption=(
-                f"📈 <b>Автоматический отчет</b>\n"
-                f"Событий за сутки: {len(records)}\n"
-                f"📁 Файл сохранен на сервере"
+                f"📈 <b>Суточный отчет</b>\n"
+                f"Событий за сегодня: {len(daily_records)}\n"
+                f"🧠 Датасет обновлен: <code>data/datasets/training_dataset.csv</code>"
             ),
-            parse_mode='HTML'
+            parse_mode="HTML",
         )
+
+    def _write_daily_report(self, file_path: str, records):
+        with open(file_path, mode="w", encoding="utf-8-sig", newline="") as file:
+            writer = csv.writer(file, delimiter=";")
+            writer.writerow(["Vessel", "Zone", "Event", "Time", "Time In Zone"])
+            for record in records:
+                writer.writerow([
+                    record.name,
+                    record.zone,
+                    record.event_type,
+                    record.dt.strftime("%H:%M:%S"),
+                    record.time_in_zone,
+                ])
+
+    def _write_training_dataset(self, file_path: str, rows):
+        with open(file_path, mode="w", encoding="utf-8-sig", newline="") as file:
+            writer = csv.writer(file, delimiter=";")
+            writer.writerow([
+                "MMSI",
+                "Vessel",
+                "Zone",
+                "Entry Datetime",
+                "Exit Datetime",
+                "Duration Seconds",
+                "Duration HMS",
+                "Status",
+            ])
+            for row in rows:
+                writer.writerow([
+                    row.mmsi,
+                    row.name,
+                    row.zone,
+                    row.entry_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    row.exit_dt.strftime("%Y-%m-%d %H:%M:%S") if row.exit_dt else "",
+                    row.duration_seconds,
+                    row.duration_hms,
+                    row.status,
+                ])
