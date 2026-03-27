@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import delete, func, select
 
 from lng_tracker.database.connect import async_session_maker
-from lng_tracker.database.models import VesselHistory, VesselState
+from lng_tracker.database.models import AISObservation, VesselHistory, VesselState
 
 
 @dataclass
@@ -14,19 +14,6 @@ class VesselHistoryReportRow:
     event_type: str
     dt: datetime
     time_in_zone: str
-
-
-@dataclass
-class VesselPassageRow:
-    mmsi: str
-    name: str
-    zone: str
-    entry_dt: datetime
-    exit_dt: datetime | None
-    duration_seconds: int
-    duration_hms: str
-    status: str
-
 
 class VesselRepository:
     async def get_active_vessels(self):
@@ -48,6 +35,7 @@ class VesselRepository:
         async with async_session_maker() as session:
             await session.execute(delete(VesselState))
             await session.execute(delete(VesselHistory))
+            await session.execute(delete(AISObservation))
             await session.commit()
 
     async def get_history(self):
@@ -61,12 +49,6 @@ class VesselRepository:
         report_rows = self._build_history_report_rows(records) # type: ignore
         report_rows.sort(key=lambda row: row.dt, reverse=True)
         return report_rows
-
-    async def get_training_dataset_rows(self):
-        records = await self._get_history_records_ascending()
-        passages = self._build_passage_rows(records) # type: ignore
-        passages.sort(key=lambda row: row.entry_dt, reverse=True)
-        return passages
 
     async def _get_history_records_ascending(self, since: datetime | None = None):
         async with async_session_maker() as session:
@@ -134,57 +116,6 @@ class VesselRepository:
                     break
 
         return report_rows
-
-    def _build_passage_rows(self, records: list[VesselHistory]):
-        open_entries: dict[tuple[str, str], VesselHistory] = {}
-        passages: list[VesselPassageRow] = []
-        now = datetime.now()
-
-        for record in records:
-            key = (record.mmsi, record.zone)
-
-            if record.event_type == "ENTRY":
-                open_entries[key] = record
-                continue
-
-            if record.event_type != "EXIT":
-                continue
-
-            entry_record = open_entries.pop(key, None)
-            if entry_record is None:
-                continue
-
-            duration_seconds = max(0, int((record.dt - entry_record.dt).total_seconds()))
-            passages.append(
-                VesselPassageRow(
-                    mmsi=record.mmsi,
-                    name=entry_record.name,
-                    zone=record.zone,
-                    entry_dt=entry_record.dt,
-                    exit_dt=record.dt,
-                    duration_seconds=duration_seconds,
-                    duration_hms=self._format_duration(duration_seconds),
-                    status="completed",
-                )
-            )
-
-        for (mmsi, zone), entry_record in open_entries.items():
-            duration_seconds = max(0, int((now - entry_record.dt).total_seconds()))
-            passages.append(
-                VesselPassageRow(
-                    mmsi=mmsi,
-                    name=entry_record.name,
-                    zone=zone,
-                    entry_dt=entry_record.dt,
-                    exit_dt=None,
-                    duration_seconds=duration_seconds,
-                    duration_hms=self._format_duration(duration_seconds),
-                    status="active",
-                )
-            )
-
-        return passages
-
     @staticmethod
     def _format_duration(total_seconds: float | int) -> str:
         total_seconds = max(0, int(total_seconds))
