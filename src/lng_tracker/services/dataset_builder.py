@@ -137,39 +137,81 @@ class DatasetBuilder:
         history_records = await self._load_history()
 
         ais_rows = self._build_ais_rows(observations)
-        zone_events = self._build_zone_events(observations, history_records)
+        zone_events = self._build_zone_events(observations, history_records, include_active=False)
         sts_candidates = self._build_sts_candidates(zone_events, observations)
+
+        os.makedirs(output_dir, exist_ok=True)
+        state = self._read_export_state(output_dir)
+        existing_zone_event_keys = self._read_jsonl_keys(
+            os.path.join(output_dir, "vessel_zone_events.jsonl"),
+            self._zone_event_key_from_row,
+        )
+        existing_sts_candidate_keys = self._read_jsonl_keys(
+            os.path.join(output_dir, "sts_candidates.jsonl"),
+            self._sts_candidate_key_from_row,
+        )
+
+        last_observation_id = self._resolve_last_observation_id(
+            output_dir=output_dir,
+            state=state,
+            observations=observations,
+        )
+        new_observations = [obs for obs in observations if obs.id and obs.id > last_observation_id]
+        new_ais_rows = self._build_ais_rows(new_observations)
+        new_zone_events = [
+            row for row in zone_events if self._zone_event_key_from_row(row) not in existing_zone_event_keys
+        ]
+        new_sts_candidates = [
+            row
+            for row in sts_candidates
+            if self._sts_candidate_key_from_row(row) not in existing_sts_candidate_keys
+        ]
+
+        self._append_jsonl(
+            os.path.join(output_dir, "ais_observations.jsonl"),
+            new_ais_rows,
+        )
+        self._append_jsonl(
+            os.path.join(output_dir, "vessel_zone_events.jsonl"),
+            new_zone_events,
+        )
+        self._append_jsonl(
+            os.path.join(output_dir, "sts_candidates.jsonl"),
+            new_sts_candidates,
+        )
 
         payload = {
             "dataset_name": self.dataset_name,
             "generated_at": _to_iso_utc(datetime.now(timezone.utc)),
-            "format": "json",
-            "ais_observations": ais_rows,
-            "vessel_zone_events": zone_events,
-            "sts_candidates": sts_candidates,
+            "format": "jsonl",
+            "files": {
+                "ais_observations": "ais_observations.jsonl",
+                "vessel_zone_events": "vessel_zone_events.jsonl",
+                "sts_candidates": "sts_candidates.jsonl",
+            },
+            "appended": {
+                "ais_observations": len(new_ais_rows),
+                "vessel_zone_events": len(new_zone_events),
+                "sts_candidates": len(new_sts_candidates),
+            },
+            "totals": {
+                "ais_observations": len(ais_rows),
+                "vessel_zone_events": len(zone_events),
+                "sts_candidates": len(sts_candidates),
+            },
         }
-
-        os.makedirs(output_dir, exist_ok=True)
         bundle_path = os.path.join(output_dir, f"{self.dataset_name}.json")
         self._write_json(bundle_path, payload)
-        self._write_jsonl(
-            os.path.join(output_dir, "ais_observations.jsonl"),
-            ais_rows,
-        )
-        self._write_jsonl(
-            os.path.join(output_dir, "vessel_zone_events.jsonl"),
-            zone_events,
-        )
-        self._write_jsonl(
-            os.path.join(output_dir, "sts_candidates.jsonl"),
-            sts_candidates,
+        self._write_export_state(
+            output_dir,
+            {"last_observation_id": max((obs.id or 0) for obs in observations) if observations else 0},
         )
 
         logger.info(
-            "ML dataset exported | observations={} | zone_events={} | sts_candidates={} | dir={}",
-            len(ais_rows),
-            len(zone_events),
-            len(sts_candidates),
+            "ML dataset exported incrementally | appended_observations={} | appended_zone_events={} | appended_sts_candidates={} | dir={}",
+            len(new_ais_rows),
+            len(new_zone_events),
+            len(new_sts_candidates),
             output_dir,
         )
         return payload
@@ -225,6 +267,7 @@ class DatasetBuilder:
         self,
         observations: list[AISObservation],
         history_records: list[VesselHistory],
+        include_active: bool = True,
     ) -> list[dict[str, Any]]:
         observations_by_vessel_zone: dict[tuple[str, str], list[AISObservation]] = defaultdict(list)
         for obs in observations:
@@ -257,16 +300,17 @@ class DatasetBuilder:
                 )
             )
 
-        for key, entry_record in open_entries.items():
-            zone_events.append(
-                self._build_zone_event_from_window(
-                    observations_by_vessel_zone.get(key, []),
-                    entry_record=entry_record,
-                    exit_dt=now,
-                    status="active",
-                    emit_exit_datetime=False,
+        if include_active:
+            for key, entry_record in open_entries.items():
+                zone_events.append(
+                    self._build_zone_event_from_window(
+                        observations_by_vessel_zone.get(key, []),
+                        entry_record=entry_record,
+                        exit_dt=now,
+                        status="active",
+                        emit_exit_datetime=False,
+                    )
                 )
-            )
 
         zone_events.sort(key=lambda row: row["entry_datetime"], reverse=True)
         return zone_events
@@ -510,7 +554,79 @@ class DatasetBuilder:
             json.dump(payload, file, ensure_ascii=False, indent=2)
 
     @staticmethod
-    def _write_jsonl(file_path: str, rows: list[dict[str, Any]]) -> None:
-        with open(file_path, "w", encoding="utf-8") as file:
+    def _append_jsonl(file_path: str, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        with open(file_path, "a", encoding="utf-8") as file:
             for row in rows:
                 file.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    @staticmethod
+    def _read_jsonl_keys(file_path: str, key_builder) -> set[tuple[Any, ...]]:
+        if not os.path.exists(file_path):
+            return set()
+
+        keys: set[tuple[Any, ...]] = set()
+        with open(file_path, "r", encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                keys.add(key_builder(row))
+        return keys
+
+    @staticmethod
+    def _zone_event_key_from_row(row: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            row.get("mmsi"),
+            row.get("zone"),
+            row.get("entry_datetime"),
+            row.get("exit_datetime"),
+            row.get("status"),
+        )
+
+    @staticmethod
+    def _sts_candidate_key_from_row(row: dict[str, Any]) -> tuple[Any, ...]:
+        vessel_ids = sorted([row.get("vessel_a_mmsi"), row.get("vessel_b_mmsi")], key=lambda value: str(value))
+        return (
+            vessel_ids[0],
+            vessel_ids[1],
+            row.get("zone"),
+            row.get("overlap_start"),
+            row.get("overlap_end"),
+        )
+
+    @staticmethod
+    def _export_state_path(output_dir: str) -> str:
+        return os.path.join(output_dir, "dataset_export_state.json")
+
+    def _read_export_state(self, output_dir: str) -> dict[str, Any]:
+        file_path = self._export_state_path(output_dir)
+        if not os.path.exists(file_path):
+            return {}
+
+        with open(file_path, "r", encoding="utf-8") as file:
+            try:
+                return json.load(file)
+            except json.JSONDecodeError:
+                return {}
+
+    def _write_export_state(self, output_dir: str, payload: dict[str, Any]) -> None:
+        self._write_json(self._export_state_path(output_dir), payload)
+
+    def _resolve_last_observation_id(
+        self,
+        output_dir: str,
+        state: dict[str, Any],
+        observations: list[AISObservation],
+    ) -> int:
+        ais_file_path = os.path.join(output_dir, "ais_observations.jsonl")
+        if os.path.exists(ais_file_path):
+            if "last_observation_id" in state:
+                return int(state["last_observation_id"])
+            return max((obs.id or 0) for obs in observations) if observations else 0
+        return 0

@@ -55,23 +55,16 @@ class TelegramNotifier:
 
         logger.info("Alert delivery completed: {}/{}", delivered, len(allowed_user))
 
-    async def send_daily_csv_report(self):
+    async def send_daily_report(self):
         now = datetime.now()
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         daily_records = await self.vessels_repository.get_history_report_rows(since=day_start)
-        training_rows = await self.vessels_repository.get_training_dataset_rows()
 
         reports_dir = os.path.join(os.getcwd(), "data", "reports")
-        datasets_dir = os.path.join(os.getcwd(), "data", "datasets")
         os.makedirs(reports_dir, exist_ok=True)
-        os.makedirs(datasets_dir, exist_ok=True)
-
-        training_file_path = os.path.join(datasets_dir, "training_dataset.csv")
-        self._write_training_dataset(training_file_path, training_rows)
-        await self.dataset_builder.export(datasets_dir)
 
         if not daily_records:
-            logger.info("No daily events found for report; datasets updated only")
+            logger.info("No daily events found for report")
             return
 
         daily_filename = f"lng_report_{now.strftime('%d_%m_%Y')}.csv"
@@ -83,11 +76,15 @@ class TelegramNotifier:
             document=FSInputFile(daily_file_path),
             caption=(
                 f"<b>Daily report</b>\n"
-                f"Events today: {len(daily_records)}\n"
-                f"Datasets updated: <code>data/datasets/</code>"
+                f"Events today: {len(daily_records)}"
             ),
             parse_mode="HTML",
         )
+
+    async def update_datasets(self):
+        datasets_dir = os.path.join(os.getcwd(), "data", "datasets")
+        os.makedirs(datasets_dir, exist_ok=True)
+        return await self.dataset_builder.export(datasets_dir)
 
     def _write_daily_report(self, file_path: str, records):
         with open(file_path, mode="w", encoding="utf-8-sig", newline="") as file:
@@ -100,29 +97,4 @@ class TelegramNotifier:
                     record.event_type,
                     record.dt.strftime("%H:%M:%S"),
                     record.time_in_zone,
-                ])
-
-    def _write_training_dataset(self, file_path: str, rows):
-        with open(file_path, mode="w", encoding="utf-8-sig", newline="") as file:
-            writer = csv.writer(file, delimiter=";")
-            writer.writerow([
-                "MMSI",
-                "Vessel",
-                "Zone",
-                "Entry Datetime",
-                "Exit Datetime",
-                "Duration Seconds",
-                "Duration HMS",
-                "Status",
-            ])
-            for row in rows:
-                writer.writerow([
-                    row.mmsi,
-                    row.name,
-                    row.zone,
-                    row.entry_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                    row.exit_dt.strftime("%Y-%m-%d %H:%M:%S") if row.exit_dt else "",
-                    row.duration_seconds,
-                    row.duration_hms,
-                    row.status,
                 ])

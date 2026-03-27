@@ -32,7 +32,7 @@ async def main():
     notifier = TelegramNotifier(bot)
     engine = LNGMonitorEngine(notifier)
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    scheduler.add_job(notifier.send_daily_csv_report, "cron", hour=9, minute=47)
+    scheduler.add_job(notifier.send_daily_report, "cron", hour=9, minute=47)
     scheduler.start()
     logger.info(
         "Starting bot and monitor engine | scan_interval={}s | admin_chat_id={}",
