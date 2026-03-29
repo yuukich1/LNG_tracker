@@ -132,7 +132,6 @@ class LNGMonitorEngine:
                 entry_count,
                 exit_count,
             )
-            await self.notifier.update_datasets()
 
     async def run_forever(self):
         logger.info("Monitor engine started")

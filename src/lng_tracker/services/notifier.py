@@ -9,7 +9,6 @@ from loguru import logger
 from lng_tracker.core.config import settings
 from lng_tracker.repository.users import UserRepository
 from lng_tracker.repository.vessels import VesselRepository
-from lng_tracker.services.dataset_builder import DatasetBuilder
 
 
 class TelegramNotifier:
@@ -17,7 +16,6 @@ class TelegramNotifier:
         self.bot = bot
         self.users_repository = UserRepository()
         self.vessels_repository = VesselRepository()
-        self.dataset_builder = DatasetBuilder()
 
     async def send_vessel_alert(self, vessel_name: str, zone: str, mmsi: str):
         allowed_user = await self.users_repository.get_allowed_users()
@@ -80,11 +78,6 @@ class TelegramNotifier:
             ),
             parse_mode="HTML",
         )
-
-    async def update_datasets(self):
-        datasets_dir = os.path.join(os.getcwd(), "data", "datasets")
-        os.makedirs(datasets_dir, exist_ok=True)
-        return await self.dataset_builder.export(datasets_dir)
 
     def _write_daily_report(self, file_path: str, records):
         with open(file_path, mode="w", encoding="utf-8-sig", newline="") as file:
